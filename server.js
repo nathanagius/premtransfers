@@ -75,7 +75,8 @@ cron.schedule('*/15 * * * *', updateTransfers); // Every 15 minutes
 // Initial data load
 updateTransfers();
 
-app.listen(PORT, () => {
+app.listen(PORT, '0.0.0.0', () => {
   console.log(`Premier League Transfers server running on port ${PORT}`);
   console.log(`Visit http://localhost:${PORT} to view the website`);
+  console.log(`Server is accessible from any IP on port ${PORT}`);
 });
