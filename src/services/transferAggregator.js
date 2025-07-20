@@ -16,6 +16,10 @@ if (process.env.TWITTER_BEARER_TOKEN) {
   twitterClient = new TwitterApi(process.env.TWITTER_BEARER_TOKEN);
 }
 
+const PREMIER_LEAGUE_URL = 'https://www.premierleague.com/transfers';
+const TRANSFERMARKT_URL = 'https://www.transfermarkt.com/premier-league/transfers/wettbewerb/GB1';
+const ESPN_URL = 'https://www.espn.com/soccer/transfers/_/league/eng.1';
+
 class TransferAggregator {
   
   // BBC Sport transfers
@@ -141,6 +145,134 @@ class TransferAggregator {
     }
   }
 
+  // Premier League official transfers
+  async getPLTransfers() {
+    try {
+      console.log('Fetching Premier League official transfers...');
+      const { data: html } = await axios.get(PREMIER_LEAGUE_URL, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0',
+          'Accept-Language': 'en-US,en;q=0.9',
+        },
+      });
+      const $ = cheerio.load(html);
+      const transfers = [];
+      // The Premier League site loads transfers via client-side JS, so static HTML may not have data.
+      // We'll look for a <script> tag with window.__PRELOADED_STATE__ or similar, or fallback to static scraping if possible.
+      const scriptTag = $('script').filter((i, el) => $(el).html().includes('window.__PRELOADED_STATE__')).first();
+      if (scriptTag.length) {
+        const scriptContent = scriptTag.html();
+        const match = scriptContent.match(/window\.__PRELOADED_STATE__\s*=\s*(\{.*?\});/s);
+        if (match && match[1]) {
+          const state = JSON.parse(match[1]);
+          const plTransfers = state.transfers && state.transfers.transfersTable && state.transfers.transfersTable.transfers;
+          if (Array.isArray(plTransfers)) {
+            for (const item of plTransfers) {
+              // Only include Premier League clubs
+              if (item.club && this.isPremierLeagueClub(item.club)) {
+                transfers.push({
+                  id: this.generateId(item.playerName + item.club, 'pl'),
+                  title: `${item.playerName} to ${item.club}`,
+                  description: item.type || '',
+                  url: PREMIER_LEAGUE_URL,
+                  source: 'Premier League',
+                  publishedAt: item.date ? moment(item.date).toISOString() : undefined,
+                  timestamp: item.date ? moment(item.date).unix() : undefined
+                });
+              }
+            }
+          }
+        }
+      }
+      return transfers.sort((a, b) => b.timestamp - a.timestamp);
+    } catch (error) {
+      console.error('Error fetching Premier League transfers:', error.message);
+      return [];
+    }
+  }
+
+  // Transfermarkt Premier League transfers
+  async getTransfermarktTransfers() {
+    try {
+      console.log('Fetching Transfermarkt transfers...');
+      const { data: html } = await axios.get(TRANSFERMARKT_URL, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0',
+          'Accept-Language': 'en-US,en;q=0.9',
+        },
+      });
+      const $ = cheerio.load(html);
+      const transfers = [];
+      // Transfermarkt uses a table for transfers. We'll parse the table rows.
+      $('table.items > tbody > tr').each((i, el) => {
+        const columns = $(el).find('td');
+        if (columns.length < 8) return; // skip non-transfer rows
+        const player = $(columns[0]).find('img').attr('alt') || $(columns[0]).text().trim();
+        const fromClub = $(columns[2]).find('img').attr('alt') || $(columns[2]).text().trim();
+        const toClub = $(columns[5]).find('img').attr('alt') || $(columns[5]).text().trim();
+        const transferDate = $(columns[7]).text().trim();
+        const fee = $(columns[8]).text().trim();
+        // Only include Premier League clubs as destination
+        if (this.isPremierLeagueClub(toClub)) {
+          transfers.push({
+            id: this.generateId(player + toClub + transferDate, 'tm'),
+            title: `${player} to ${toClub}`,
+            description: `From: ${fromClub}, Fee: ${fee}`,
+            url: TRANSFERMARKT_URL,
+            source: 'Transfermarkt',
+            publishedAt: transferDate ? moment(transferDate, 'MMM d, yyyy').toISOString() : undefined,
+            timestamp: transferDate ? moment(transferDate, 'MMM d, yyyy').unix() : undefined
+          });
+        }
+      });
+      return transfers.sort((a, b) => b.timestamp - a.timestamp);
+    } catch (error) {
+      console.error('Error fetching Transfermarkt transfers:', error.message);
+      return [];
+    }
+  }
+
+  // ESPN FC Premier League transfers
+  async getESPNTransfers() {
+    try {
+      console.log('Fetching ESPN FC transfers...');
+      const { data: html } = await axios.get(ESPN_URL, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0',
+          'Accept-Language': 'en-US,en;q=0.9',
+        },
+      });
+      const $ = cheerio.load(html);
+      const transfers = [];
+      // ESPN FC uses tables for transfers. We'll parse the table rows for Premier League.
+      $('section[data-name="Transfers"] table tbody tr').each((i, el) => {
+        const columns = $(el).find('td');
+        if (columns.length < 5) return;
+        const date = $(columns[0]).text().trim();
+        const player = $(columns[1]).text().trim();
+        const fromClub = $(columns[2]).text().trim();
+        const toClub = $(columns[3]).text().trim();
+        const details = $(columns[4]).text().trim();
+        // Only include Premier League clubs as destination
+        if (this.isPremierLeagueClub(toClub)) {
+          transfers.push({
+            id: this.generateId(player + toClub + date, 'espn'),
+            title: `${player} to ${toClub}`,
+            description: `From: ${fromClub}, Details: ${details}`,
+            url: ESPN_URL,
+            source: 'ESPN FC',
+            publishedAt: date ? moment(date, 'DD MMM YYYY').toISOString() : undefined,
+            timestamp: date ? moment(date, 'DD MMM YYYY').unix() : undefined
+          });
+        }
+      });
+      return transfers.sort((a, b) => b.timestamp - a.timestamp);
+    } catch (error) {
+      console.error('Error fetching ESPN FC transfers:', error.message);
+      return [];
+    }
+  }
+
   // Helper methods
   isTransferRelated(text) {
     if (!text) return false;
@@ -219,6 +351,19 @@ class TransferAggregator {
         metrics: { retweet_count: 200, like_count: 500 }
       }
     ];
+  }
+
+  // Helper to check if a club is a Premier League club
+  isPremierLeagueClub(clubName) {
+    if (!clubName) return false;
+    const premierLeagueTeams = [
+      'Arsenal', 'Aston Villa', 'Bournemouth', 'Brentford', 'Brighton',
+      'Burnley', 'Chelsea', 'Crystal Palace', 'Everton', 'Fulham',
+      'Liverpool', 'Luton', 'Manchester City', 'Manchester United',
+      'Newcastle', 'Nottingham Forest', 'Sheffield United', 'Tottenham',
+      'West Ham', 'Wolves'
+    ];
+    return premierLeagueTeams.some(team => clubName.toLowerCase().includes(team.toLowerCase()));
   }
 }
 

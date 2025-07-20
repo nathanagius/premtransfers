@@ -27,6 +27,12 @@ app.get('/api/transfers', (req, res) => {
   res.json(transfersData);
 });
 
+// Premier League official transfers endpoint
+app.get('/api/transfers/pl', async (req, res) => {
+  const plTransfers = await transferAggregator.getPLTransfers();
+  res.json(plTransfers);
+});
+
 app.get('/api/transfers/:source', (req, res) => {
   const source = req.params.source.toLowerCase();
   if (transfersData[source]) {
@@ -38,6 +44,18 @@ app.get('/api/transfers/:source', (req, res) => {
   } else {
     res.status(404).json({ error: 'Source not found' });
   }
+});
+
+// Transfermarkt Premier League transfers endpoint
+app.get('/api/transfers/transfermarkt', async (req, res) => {
+  const tmTransfers = await transferAggregator.getTransfermarktTransfers();
+  res.json(tmTransfers);
+});
+
+// ESPN FC Premier League transfers endpoint
+app.get('/api/transfers/espn', async (req, res) => {
+  const espnTransfers = await transferAggregator.getESPNTransfers();
+  res.json(espnTransfers);
 });
 
 // Serve the main page
